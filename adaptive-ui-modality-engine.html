@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adaptive UI Modality Engine</title>
+<style>
+  :root {
+    --btn-padding: 10px 18px;
+    --btn-font-size: 0.95rem;
+    --focus-ring: transparent;
+    /* Theme tokens (changed by voice) */
+    --bg: #121212;
+    --fg: #f1f1f1;
+    --card: #1e1e1e;
+    --accent: #3d8bfd;
+    --accent-fg: #ffffff;
+    --border: rgba(128,128,128,.35);
+  }
+
+  /* Adaptive Rule: coarse touch targets */
+  body.mode-touch { --btn-padding: 18px 32px; --btn-font-size: 1.2rem; }
+  /* Adaptive Rule: prominent focus ring for keyboard */
+  body.mode-keyboard { --focus-ring: 4px solid #ff9900; }
+  /* Adaptive Rule: voice mode = large buttons + glow */
+  body.mode-voice { --btn-padding: 14px 26px; --btn-font-size: 1.05rem; --focus-ring: 3px solid var(--accent); }
+
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, sans-serif; margin: 0; padding: 30px;
+    background: var(--bg); color: var(--fg);
+    transition: background .4s ease, color .4s ease;
+  }
+  h2 { margin-top: 0; }
+  .badge {
+    display: inline-block; padding: 6px 12px; background: var(--accent); color: var(--accent-fg);
+    border-radius: 4px; font-weight: bold; margin-bottom: 20px; transition: background .4s;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; transition: background .4s; }
+  .card h3 { margin-top: 0; }
+
+  .nav-button {
+    padding: var(--btn-padding); font-size: var(--btn-font-size);
+    background: var(--accent); color: var(--accent-fg);
+    border: none; border-radius: 6px; cursor: pointer;
+    outline: var(--focus-ring); transition: all .2s ease; margin: 4px 4px 4px 0;
+  }
+  .nav-button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  .nav-button.listening { animation: pulse 1s infinite; background: #d9363e; color: #fff; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(217,54,62,.25); } }
+
+  /* Tracker */
+  #trackArea {
+    position: relative; height: 260px; border: 2px dashed var(--border); border-radius: 8px;
+    overflow: hidden; cursor: crosshair; touch-action: none;
+  }
+  #trackCanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #trackHint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: .5; pointer-events: none; text-align: center; padding: 10px; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+  .stat { background: rgba(128,128,128,.15); border-radius: 6px; padding: 8px 10px; font-size: .85rem; }
+  .stat b { display: block; font-size: 1.1rem; }
+  #log { font-family: monospace; font-size: .78rem; height: 110px; overflow-y: auto; background: rgba(128,128,128,.15); border-radius: 6px; padding: 8px; margin-top: 12px; }
+
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .sw { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; }
+  #voiceStatus { min-height: 1.4em; font-style: italic; opacity: .85; }
+  code { background: rgba(128,128,128,.2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body class="mode-mouse">
+
+<h2>Adaptive UI Modality Engine</h2>
+<div class="badge" id="modalityBadge">Active Modality: Mouse (Fine Pointer)</div>
+
+<div class="grid">
+
+  <!-- Card 1: adaptive button -->
+  <div class="card">
+    <h3>Adaptive Controls</h3>
+    <p>Use mouse, touch, or the Tab key. The button size and focus ring adapt to the input modality.</p>
+    <button class="nav-button" id="actionBtn">Interactive Action Button</button>
+    <button class="nav-button secondary" id="secondaryBtn">Secondary Action</button>
+    <div id="actionOut" aria-live="polite" style="margin-top:12px;padding:10px;border-radius:6px;background:rgba(128,128,128,.15);">Press a button to see it respond.</div>
+  </div>
+
+  <!-- Card 2: voice theme -->
+  <div class="card">
+    <h3>Voice Theme Control</h3>
+    <button class="nav-button" id="micBtn">🎤 Start Listening</button>
+    <div id="voiceStatus">Voice off. Click the mic and say a color.</div>
+    <p>Try: <code>white</code> <code>black</code> <code>red</code> <code>blue</code> <code>green</code> <code>yellow</code> <code>orange</code> <code>purple</code> <code>pink</code> <code>grey</code> <code>dark</code> (reset)</p>
+    <div class="swatches" id="swatches"></div>
+    <small>Swatches are a fallback if your browser has no speech recognition (Chrome / Edge work best).</small>
+  </div>
+
+  <!-- Card 3: mouse tracker -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h3>Mouse Movement Tracker</h3>
+    <div id="trackArea">
+      <canvas id="trackCanvas"></canvas>
+      <div id="trackHint">Move the mouse (or drag a finger) inside this box</div>
+    </div>
+    <div class="stats">
+      <div class="stat">Position<b id="sPos">–</b></div>
+      <div class="stat">Speed (px/s)<b id="sSpeed">0</b></div>
+      <div class="stat">Distance (px)<b id="sDist">0</b></div>
+      <div class="stat">Move events<b id="sMoves">0</b></div>
+      <div class="stat">Clicks<b id="sClicks">0</b></div>
+      <div class="stat">Time in area (s)<b id="sTime">0</b></div>
+    </div>
+    <div id="log"></div>
+    <button class="nav-button secondary" id="clearBtn">Clear</button>
+    <button class="nav-button secondary" id="csvBtn">Download CSV</button>
+  </div>
+
+</div>
+
+<script>
+/* ============ 1. MODALITY ENGINE ============ */
+const badge = document.getElementById('modalityBadge');
+let lastTouch = 0;
+
+function setModality(modeName, bodyClass) {
+  document.body.classList.remove('mode-mouse', 'mode-touch', 'mode-keyboard', 'mode-voice');
+  document.body.classList.add(bodyClass);
+  badge.textContent = `Active Modality: ${modeName}`;
+}
+
+window.addEventListener('touchstart', () => {
+  lastTouch = Date.now();
+  setModality('Touch (Coarse Pointer - Enlarged Touch Targets)', 'mode-touch');
+}, { passive: true });
+
+window.addEventListener('mousemove', () => {
+  if (Date.now() - lastTouch < 800) return; // ignore emulated mouse events after touch
+  if (!document.body.classList.contains('mode-mouse'))
+    setModality('Mouse (Fine Pointer - Compact Precision Layout)', 'mode-mouse');
+});
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Tab') setModality('Keyboard (High-Contrast Focus Ring Active)', 'mode-keyboard');
+});
+
+/* ============ 1b. BUTTON ACTIONS ============ */
+const actionBtn = document.getElementById('actionBtn');
+const secondaryBtn = document.getElementById('secondaryBtn');
+const actionOut = document.getElementById('actionOut');
+let actionCount = 0, compact = false;
+
+function currentModality() {
+  const c = ['mode-touch', 'mode-keyboard', 'mode-voice', 'mode-mouse'].find(m => document.body.classList.contains(m));
+  return { 'mode-touch': 'Touch', 'mode-keyboard': 'Keyboard', 'mode-voice': 'Voice', 'mode-mouse': 'Mouse' }[c];
+}
+
+// Primary: counts activations and reports which modality triggered it
+actionBtn.addEventListener('click', () => {
+  actionCount++;
+  actionOut.textContent = `Primary action fired ${actionCount}× via ${currentModality()} at ${new Date().toLocaleTimeString()}`;
+  actionBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }], { duration: 250 });
+});
+
+// Secondary: toggles a manual "compact / large" override on the button sizing
+secondaryBtn.addEventListener('click', () => {
+  compact = !compact;
+  const root = document.body.style; // inline on body beats the mode-* classes
+  if (compact) { root.setProperty('--btn-padding', '6px 10px'); root.setProperty('--btn-font-size', '0.8rem'); }
+  else { root.removeProperty('--btn-padding'); root.removeProperty('--btn-font-size'); }
+  secondaryBtn.textContent = compact ? 'Secondary Action (Compact ON)' : 'Secondary Action';
+  actionOut.textContent = compact ? 'Secondary action: manual compact override enabled.' : 'Secondary action: override off, buttons adapt to modality again.';
+});
+
+/* ============ 2. MOUSE TRACKER ============ */
+const area = document.getElementById('trackArea');
+const canvas = document.getElementById('trackCanvas');
+const ctx = canvas.getContext('2d');
+const hint = document.getElementById('trackHint');
+const logEl = document.getElementById('log');
+const el = id => document.getElementById(id);
+
+let dpr = window.devicePixelRatio || 1;
+function resizeCanvas() {
+  const r = area.getBoundingClientRect();
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+const T = { prev: null, dist: 0, moves: 0, clicks: 0, inside: false, enterAt: 0, timeMs: 0, data: [] };
+
+function strokeColor() { return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#3d8bfd'; }
+
+function record(type, x, y, speed) {
+  T.data.push({ t: Date.now(), type, x: Math.round(x), y: Math.round(y), speed: Math.round(speed) });
+  if (T.data.length > 5000) T.data.shift();
+}
+function addLog(text) {
+  const d = document.createElement('div'); d.textContent = text;
+  logEl.appendChild(d);
+  while (logEl.children.length > 60) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+area.addEventListener('pointermove', e => {
+  const r = area.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top, now = performance.now();
+  let speed = 0;
+  if (T.prev) {
+    const dx = x - T.prev.x, dy = y - T.prev.y, dt = (now - T.prev.t) / 1000;
+    const d = Math.hypot(dx, dy);
+    T.dist += d;
+    speed = dt > 0 ? d / dt : 0;
+    // trail: color intensity by speed
+    ctx.strokeStyle = strokeColor();
+    ctx.globalAlpha = Math.min(1, 0.35 + speed / 1500);
+    ctx.lineWidth = Math.max(1.5, 5 - speed / 400);
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(T.prev.x, T.prev.y); ctx.lineTo(x, y); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  T.prev = { x, y, t: now };
+  T.moves++;
+  hint.style.display = 'none';
+  el('sPos').textContent = `${Math.round(x)}, ${Math.round(y)}`;
+  el('sSpeed').textContent = Math.round(speed);
+  el('sDist').textContent = Math.round(T.dist);
+  el('sMoves').textContent = T.moves;
+  if (T.moves % 10 === 0) { record('move', x, y, speed); addLog(`move  x=${Math.round(x)} y=${Math.round(y)} v=${Math.round(speed)}px/s`); }
+});
+
+area.addEventListener('pointerenter', () => { T.inside = true; T.enterAt = performance.now(); T.prev = null; });
+area.addEventListener('pointerleave', () => {
+  if (T.inside) T.timeMs += performance.now() - T.enterAt;
+  T.inside = false; T.prev = null;
+  el('sTime').textContent = (T.timeMs / 1000).toFixed(1);
+});
+setInterval(() => {
+  if (T.inside) el('sTime').textContent = ((T.timeMs + performance.now() - T.enterAt) / 1000).toFixed(1);
+}, 200);
+
+area.addEventListener('pointerdown', e => {
+  const r = area.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  T.clicks++; el('sClicks').textContent = T.clicks;
+  record('click', x, y, 0); addLog(`click x=${Math.round(x)} y=${Math.round(y)}`);
+  ctx.fillStyle = '#d9363e'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+});
+
+el('clearBtn').addEventListener('click', () => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  Object.assign(T, { prev: null, dist: 0, moves: 0, clicks: 0, timeMs: 0, data: [] });
+  if (T.inside) T.enterAt = performance.now();
+  ['sDist', 'sMoves', 'sClicks', 'sTime', 'sSpeed'].forEach(i => el(i).textContent = '0');
+  el('sPos').textContent = '–'; logEl.innerHTML = ''; hint.style.display = 'flex';
+});
+
+el('csvBtn').addEventListener('click', () => {
+  const rows = ['timestamp,type,x,y,speed_px_s', ...T.data.map(d => `${d.t},${d.type},${d.x},${d.y},${d.speed}`)];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+  a.download = 'mouse-tracking.csv'; a.click();
+});
+
+/* ============ 3. VOICE THEME CONTROL ============ */
+const COLORS = {
+  white:  { bg: '#ffffff', card: '#f2f2f2', accent: '#0056b3' },
+  black:  { bg: '#000000', card: '#141414', accent: '#3d8bfd' },
+  dark:   { bg: '#121212', card: '#1e1e1e', accent: '#3d8bfd' },
+  red:    { bg: '#7a1118', card: '#98202a', accent: '#ffb3b8' },
+  blue:   { bg: '#0b2a6f', card: '#143a8f', accent: '#8ec5ff' },
+  green:  { bg: '#0e4d2a', card: '#17663a', accent: '#9bf0b8' },
+  yellow: { bg: '#fff3a3', card: '#ffe96b', accent: '#7a5c00' },
+  orange: { bg: '#ff9a3c', card: '#ffb067', accent: '#6b2d00' },
+  purple: { bg: '#3d1a78', card: '#522a9a', accent: '#d1b3ff' },
+  pink:   { bg: '#ffc2dc', card: '#ffa8cd', accent: '#a0124f' },
+  grey:   { bg: '#6b6b6b', card: '#808080', accent: '#ffffff' },
+};
+COLORS.gray = COLORS.grey; COLORS.reset = COLORS.dark; COLORS.default = COLORS.dark;
+
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function applyTheme(name) {
+  const t = COLORS[name]; if (!t) return false;
+  const root = document.documentElement.style;
+  const fg = luminance(t.bg) > 0.4 ? '#111111' : '#f5f5f5';
+  root.setProperty('--bg', t.bg);
+  root.setProperty('--card', t.card);
+  root.setProperty('--fg', fg);
+  root.setProperty('--accent', t.accent);
+  root.setProperty('--accent-fg', luminance(t.accent) > 0.4 ? '#111111' : '#ffffff');
+  return true;
+}
+
+// swatch fallback
+const sw = el('swatches');
+['white', 'black', 'red', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink', 'grey'].forEach(c => {
+  const b = document.createElement('button');
+  b.className = 'sw'; b.style.background = COLORS[c].bg; b.title = c; b.setAttribute('aria-label', c);
+  b.onclick = () => { applyTheme(c); status(`Theme set to ${c} (clicked)`); };
+  sw.appendChild(b);
+});
+
+const micBtn = el('micBtn');
+function status(t) { el('voiceStatus').textContent = t; }
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false;
+
+if (!SR) {
+  micBtn.disabled = true;
+  status('Speech recognition is not supported in this browser. Use Chrome/Edge or the swatches.');
+} else {
+  rec = new SR();
+  rec.lang = 'en-US';
+  rec.continuous = true;
+  rec.interimResults = false;
+
+  rec.onresult = e => {
+    const heard = e.results[e.results.length - 1][0].transcript.toLowerCase().trim();
+    const word = Object.keys(COLORS).find(c => heard.split(/\s+/).includes(c) || heard.includes(c));
+    if (word) { applyTheme(word); status(`Heard "${heard}" → theme: ${word}`); }
+    else status(`Heard "${heard}" – no color matched`);
+    setModality('Voice (Speech-Driven Theme Control Active)', 'mode-voice');
+  };
+  rec.onerror = e => status(`Voice error: ${e.error}${e.error === 'not-allowed' ? ' (allow microphone access)' : ''}`);
+  rec.onend = () => { if (listening) { try { rec.start(); } catch (_) {} } }; // keep alive
+
+  micBtn.addEventListener('click', () => {
+    if (!listening) {
+      listening = true; rec.start();
+      micBtn.textContent = '⏹ Stop Listening'; micBtn.classList.add('listening');
+      status('Listening… say a color.');
+    } else {
+      listening = false; rec.stop();
+      micBtn.textContent = '🎤 Start Listening'; micBtn.classList.remove('listening');
+      status('Voice off.');
+    }
+  });
+}
+</script>
+</body>
+</html>
